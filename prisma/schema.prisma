@@ -3,79 +3,38 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
-enum LeadStatus {
-  NEW
-  CONTACTED
-  INTERESTED
-  SOLD
-  NOT_INTERESTED
-}
-
-model User {
-  id            String    @id @default(cuid())
-  name          String
-  email         String    @unique
-  emailVerified DateTime?
-  password      String
-  image         String?
-  accounts      Account[]
-  sessions      Session[]
-  leads         Lead[]
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  @@map("users")
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-  @@map("accounts")
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("sessions")
-}
-
-model Lead {
-  id        String     @id @default(cuid())
-  name      String
-  address   String
+model House {
+  id        String      @id @default(cuid())
+  address   String?
   latitude  Float
   longitude Float
-  phone     String?
-  email     String?
-  status    LeadStatus @default(NEW)
-  notes     String?
-  userId    String
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  events    DoorEvent[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 
-  @@index([userId])
-  @@index([status])
   @@index([latitude, longitude])
-  @@map("leads")
+  @@map("houses")
+}
+
+// Append-only event log.
+// type = "CREATE" for new placements, "EDIT" for edits via the edit modal.
+// Latest event per house = current visible state on the map.
+model DoorEvent {
+  id            String   @id @default(cuid())
+  houseId       String
+  house         House    @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  type          String   @default("CREATE") // "CREATE" | "EDIT"
+  status        String   // NOT_HOME | NOT_INTERESTED | SOLD | NOT_VISITED
+  notes         String?
+  createdByName String
+  createdAt     DateTime @default(now())
+
+  @@index([houseId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("door_events")
 }

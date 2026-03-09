@@ -1,5 +1,6 @@
-export { auth as middleware } from "@/lib/auth";
+// Auth middleware disabled for local MVP
+export function middleware() {}
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/map/:path*", "/leads/:path*"],
+  matcher: [],
 };
