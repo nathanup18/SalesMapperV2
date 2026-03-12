@@ -19,6 +19,39 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { MapProviderProps, FlyToTarget } from "./types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+const VIEW_KEY = "sm_map_view";
+
+// ── Saved view helpers ────────────────────────────────────────────────────────
+
+type SavedView = { latitude: number; longitude: number; zoom: number };
+
+function loadSavedView(): SavedView | null {
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as unknown;
+    if (
+      v !== null &&
+      typeof v === "object" &&
+      "latitude" in v && typeof (v as SavedView).latitude === "number" &&
+      "longitude" in v && typeof (v as SavedView).longitude === "number" &&
+      "zoom" in v && typeof (v as SavedView).zoom === "number"
+    ) {
+      return v as SavedView;
+    }
+  } catch {
+    // malformed JSON or localStorage unavailable
+  }
+  return null;
+}
+
+function saveView(v: SavedView) {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+  } catch {
+    // localStorage unavailable — silently ignore
+  }
+}
 
 // ── Marker dot ────────────────────────────────────────────────────────────────
 
@@ -42,7 +75,7 @@ function MarkerDot({ color, selected }: { color: string; selected: boolean }) {
   );
 }
 
-// ── FlyTo helper (uses map ref directly, not a hook) ──────────────────────────
+// ── FlyTo helper ──────────────────────────────────────────────────────────────
 
 function useFlyTo(mapRef: React.RefObject<MapRef | null>, flyTo: FlyToTarget | null | undefined) {
   useEffect(() => {
@@ -68,14 +101,28 @@ export default function MapboxMap({
   flyTo,
 }: MapProviderProps) {
   const mapRef = useRef<MapRef>(null);
-  const fittedRef = useRef(false);
-  // Prevent map click from firing right after a marker click
   const markerClickedRef = useRef(false);
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
 
+  // Read saved view once at mount (lazy initializer — runs client-side only).
+  // hasSavedView drives whether to skip the "fit all markers" auto-zoom.
+  const [initialView] = useState<SavedView>(() => {
+    const saved = loadSavedView();
+    return saved ?? {
+      latitude: defaultCenter[0],
+      longitude: defaultCenter[1],
+      zoom: defaultZoom,
+    };
+  });
+  const [hasSavedView] = useState(() => loadSavedView() !== null);
+
+  // fittedRef: if we're restoring a saved view, treat "fitting" as already done
+  // so we don't override the user's last position with a fitBounds call.
+  const fittedRef = useRef(hasSavedView);
+
   useFlyTo(mapRef, flyTo);
 
-  // Fit map to all markers on first non-empty load
+  // Fit map to all markers on first non-empty load — only when there is no saved view.
   useEffect(() => {
     if (!mapRef.current || markers.length === 0 || fittedRef.current) return;
     fittedRef.current = true;
@@ -110,9 +157,20 @@ export default function MapboxMap({
     }
   }, [markers, selectedMarkerId]);
 
+  // Persist map position on every pan/zoom end (not on every frame)
+  const handleMoveEnd = useCallback(
+    (e: { viewState: SavedView }) => {
+      saveView({
+        latitude: e.viewState.latitude,
+        longitude: e.viewState.longitude,
+        zoom: e.viewState.zoom,
+      });
+    },
+    []
+  );
+
   const handleMapClick = useCallback(
     (e: MapMouseEvent) => {
-      // Swallow event if it originated from a marker click
       if (markerClickedRef.current) {
         markerClickedRef.current = false;
         return;
@@ -120,7 +178,6 @@ export default function MapboxMap({
       if (placingMode) {
         onMapClick(e.lngLat.lat, e.lngLat.lng);
       } else {
-        // Clicking the canvas while not placing closes open popup
         setSelectedMarkerId(null);
       }
     },
@@ -140,17 +197,13 @@ export default function MapboxMap({
     <Map
       ref={mapRef}
       mapboxAccessToken={MAPBOX_TOKEN}
-      initialViewState={{
-        longitude: defaultCenter[1],
-        latitude: defaultCenter[0],
-        zoom: defaultZoom,
-      }}
+      initialViewState={initialView}
       style={{ width: "100%", height: "100%" }}
       mapStyle="mapbox://styles/mapbox/streets-v12"
       onClick={handleMapClick}
+      onMoveEnd={handleMoveEnd}
       reuseMaps
     >
-      {/* Markers */}
       {markers.map((m) => (
         <Marker
           key={m.id}
@@ -163,7 +216,6 @@ export default function MapboxMap({
         </Marker>
       ))}
 
-      {/* Popup for selected marker */}
       {selectedMarker && (
         <Popup
           latitude={selectedMarker.lat}

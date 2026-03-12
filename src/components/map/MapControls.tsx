@@ -1,8 +1,6 @@
 import { PLACEABLE_STATUSES, STATUS_LABELS, STATUS_HEX, type Status } from "@/lib/statuses";
 
 type Props = {
-  repName: string;
-  onRepNameChange: (name: string) => void;
   isPlacing: boolean;
   placingLoading: boolean;
   selectedStatus: Status;
@@ -17,8 +15,6 @@ type Props = {
  * the map container via absolute positioning in MapCore.
  */
 export default function MapControls({
-  repName,
-  onRepNameChange,
   isPlacing,
   placingLoading,
   selectedStatus,
@@ -28,20 +24,6 @@ export default function MapControls({
 }: Props) {
   return (
     <div className="absolute bottom-8 right-4 z-[1000] flex flex-col items-end gap-3">
-      {/* Rep name card — always visible */}
-      <div className="bg-white rounded-lg shadow-md p-3">
-        <label className="block text-xs text-gray-500 mb-1 font-medium">
-          Your Name
-        </label>
-        <input
-          type="text"
-          value={repName}
-          onChange={(e) => onRepNameChange(e.target.value)}
-          placeholder="Enter your name"
-          className="border rounded px-2 py-1.5 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-blue-400"
-        />
-      </div>
-
       {/* Placement mode card — visible when placing */}
       {isPlacing && (
         <div className="bg-white rounded-lg shadow-md overflow-hidden w-44">

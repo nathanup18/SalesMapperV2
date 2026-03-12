@@ -1,15 +1,31 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getSignedInUserId } from "@/lib/server-auth";
 import MiniBarChart from "@/components/analytics/MiniBarChart";
 import AppMenu from "@/components/navigation/AppMenu";
 
-async function getAnalytics() {
-  const [events, houseCount] = await Promise.all([
-    prisma.doorEvent.findMany({
-      select: { status: true, createdAt: true, createdByName: true },
-    }),
-    prisma.house.count(),
-  ]);
+const EMPTY_ANALYTICS = {
+  total: 0, sold: 0, notInterested: 0, notHome: 0, houseCount: 0,
+  conversionRate: "—", outreachRatio: "—", hourly: [] as {label:string;count:number}[],
+  daily: [] as {label:string;count:number}[], reps: [] as {name:string;doors:number;sales:number}[],
+};
+
+async function getAnalytics(userId: string) {
+  const eventWhere = { house: { userId } };
+  let events: { status: string; createdAt: Date; createdByName: string }[] = [];
+  let houseCount = 0;
+  try {
+    [events, houseCount] = await Promise.all([
+      prisma.doorEvent.findMany({
+        where: eventWhere,
+        select: { status: true, createdAt: true, createdByName: true },
+      }),
+      prisma.house.count({ where: { userId } }),
+    ]);
+  } catch (err) {
+    console.error("[getAnalytics] DB error:", err);
+    return EMPTY_ANALYTICS;
+  }
 
   const total = events.length;
   const sold = events.filter((e) => e.status === "SOLD").length;
@@ -48,7 +64,8 @@ async function getAnalytics() {
 }
 
 export default async function DashboardPage() {
-  const s = await getAnalytics();
+  const userId = await getSignedInUserId();
+  const s = userId ? await getAnalytics(userId) : EMPTY_ANALYTICS;
 
   return (
     <div className="px-4 py-6 sm:px-8 sm:py-8 max-w-4xl mx-auto">

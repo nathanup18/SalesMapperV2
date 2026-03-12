@@ -2,12 +2,12 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/current-user";
+import { useUser, SignOutButton } from "@clerk/nextjs";
 
 export default function AppMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const user = getCurrentUser();
+  const { user } = useUser();
 
   // Close on outside click
   useEffect(() => {
@@ -19,6 +19,9 @@ export default function AppMenu() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  const displayName = user?.fullName || user?.firstName || "Account";
+  const displayEmail = user?.primaryEmailAddress?.emailAddress ?? "";
 
   return (
     <div ref={ref} className="relative shrink-0">
@@ -40,9 +43,11 @@ export default function AppMenu() {
           {/* User info */}
           <div className="px-4 py-3 border-b border-gray-100">
             <p className="text-sm font-semibold text-gray-800 truncate">
-              {user.name || "No name set"}
+              {displayName}
             </p>
-            <p className="text-xs text-gray-400 truncate">{user.email || "No email set"}</p>
+            {displayEmail && (
+              <p className="text-xs text-gray-400 truncate">{displayEmail}</p>
+            )}
           </div>
 
           {/* Nav links */}
@@ -57,6 +62,15 @@ export default function AppMenu() {
               Settings &amp; Account
             </MenuLink>
           </nav>
+
+          {/* Sign out */}
+          <div className="border-t border-gray-100 py-1">
+            <SignOutButton redirectUrl="/sign-in">
+              <button className="w-full text-left block px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 transition-colors">
+                Sign out
+              </button>
+            </SignOutButton>
+          </div>
         </div>
       )}
     </div>

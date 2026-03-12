@@ -1,49 +1,79 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSignedInUser, AuthError } from "@/lib/server-auth";
 import { STATUSES } from "@/lib/statuses";
 import { reverseGeocode } from "@/lib/geocoding";
 
 export async function POST(req: Request) {
+  let acting;
+  try {
+    acting = await getSignedInUser();
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.statusCode });
+    }
+    throw err;
+  }
+
   const body = await req.json();
-  const { latitude, longitude, createdByName, status, notes } = body;
+  const { latitude, longitude, status, notes } = body;
 
   if (!STATUSES.includes(status)) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
-  if (!createdByName?.trim()) {
-    return NextResponse.json({ error: "createdByName required" }, { status: 400 });
+
+  const createdByName = acting.user.name ?? acting.user.email;
+
+  try {
+    const geo = await reverseGeocode(latitude, longitude);
+    const house = await prisma.house.create({
+      data: {
+        latitude,
+        longitude,
+        address: geo?.address ?? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+        userId: acting.user.id,
+      },
+    });
+
+    const event = await prisma.doorEvent.create({
+      data: {
+        houseId: house.id,
+        userId: acting.user.id,
+        type: "CREATE",
+        createdByName,
+        status,
+        notes: notes?.trim() || null,
+      },
+      include: { house: true },
+    });
+
+    return NextResponse.json(event, { status: 201 });
+  } catch (err) {
+    console.error("[POST /api/events] DB error:", err);
+    return NextResponse.json({ error: "Database error — tables may not exist yet" }, { status: 500 });
   }
-
-  // Placement mode ALWAYS creates a new House + event.
-  // We never attach to an existing house — that would silently mutate its visible state.
-  // The only way to change an existing marker is via the explicit Edit flow.
-  const geo = await reverseGeocode(latitude, longitude);
-  const house = await prisma.house.create({
-    data: {
-      latitude,   // keep exact click position — do NOT snap to geocoded centroid
-      longitude,
-      address: geo?.address ?? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
-    },
-  });
-
-  const event = await prisma.doorEvent.create({
-    data: {
-      houseId: house.id,
-      type: "CREATE",
-      createdByName: createdByName.trim(),
-      status,
-      notes: notes?.trim() || null,
-    },
-    include: { house: true },
-  });
-
-  return NextResponse.json(event, { status: 201 });
 }
 
 export async function GET() {
-  const events = await prisma.doorEvent.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { house: { select: { address: true } } },
-  });
-  return NextResponse.json(events);
+  let acting;
+  try {
+    acting = await getSignedInUser();
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.statusCode });
+    }
+    throw err;
+  }
+
+  try {
+    const events = await prisma.doorEvent.findMany({
+      where: { house: { userId: acting.user.id } },
+      orderBy: { createdAt: "desc" },
+      include: { house: { select: { address: true } } },
+    });
+    return NextResponse.json(events);
+  } catch (err) {
+    console.error("[GET /api/events] DB error:", err);
+    return NextResponse.json({ error: "Database error" }, { status: 500 });
+  }
 }

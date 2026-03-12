@@ -1,34 +1,102 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+// ── Auth / identity ────────────────────────────────────────────────────────────
+
+// App-side user record. One-to-one with a Clerk identity via clerkId.
+// Created/synced on first sign-in via syncUser() in the layout.
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  name      String?
+  phone     String?
+  // Default role for this user. Future: drive from Membership.role instead.
+  role      String   @default("REP")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  events      DoorEvent[]
+  houses      House[]
+
+  @@map("users")
+}
+
+// ── Multi-tenancy scaffold ─────────────────────────────────────────────────────
+
+// Represents a company/team. Not fully wired in this phase —
+// scaffolded so we can add team management + billing without a schema rewrite.
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  houses      House[]
+
+  @@map("organizations")
+}
+
+// Ties a User to an Organization with a role.
+// role: "ADMIN" | "MANAGER" | "REP"
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String   @default("REP")
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([userId, organizationId])
+  @@map("memberships")
+}
+
+// ── Domain models ──────────────────────────────────────────────────────────────
+
 model House {
-  id        String      @id @default(cuid())
-  address   String?
-  latitude  Float
-  longitude Float
-  events    DoorEvent[]
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id             String   @id @default(cuid())
+  address        String?
+  latitude       Float
+  longitude      Float
+  // userId — the signed-in user who placed this marker.
+  // organizationId kept for future multi-tenant use but not required in active flow.
+  userId         String?
+  organizationId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  events       DoorEvent[]
+  user         User?         @relation(fields: [userId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
 
   @@index([latitude, longitude])
+  @@index([userId])
   @@map("houses")
 }
 
 // Append-only event log.
-// type = "CREATE" for new placements, "EDIT" for edits via the edit modal.
+// type: "CREATE" | "EDIT" | "ADDRESS_CHANGE"
 // Latest event per house = current visible state on the map.
 model DoorEvent {
   id            String   @id @default(cuid())
   houseId       String
   house         House    @relation(fields: [houseId], references: [id], onDelete: Cascade)
-  type          String   @default("CREATE") // "CREATE" | "EDIT"
-  status        String   // NOT_HOME | NOT_INTERESTED | SOLD | NOT_VISITED
+  // Nullable so existing records without auth still work.
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id])
+  type          String   @default("CREATE")
+  status        String
   notes         String?
   createdByName String
   createdAt     DateTime @default(now())

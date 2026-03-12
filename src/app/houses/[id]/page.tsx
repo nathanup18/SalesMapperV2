@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { getSignedInUserId } from "@/lib/server-auth";
 import DoorEventList from "@/components/events/DoorEventList";
 import HouseMiniMap from "@/components/map/HouseMiniMap";
 import DoorEventBadge from "@/components/events/DoorEventBadge";
@@ -11,11 +12,16 @@ export default async function HouseHistoryPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const house = await prisma.house.findUnique({
-    where: { id },
-    include: { events: { orderBy: { createdAt: "desc" } } },
-  });
+  const [house, userId] = await Promise.all([
+    prisma.house.findUnique({
+      where: { id },
+      include: { events: { orderBy: { createdAt: "desc" } } },
+    }),
+    getSignedInUserId(),
+  ]);
   if (!house) notFound();
+  // Treat ownership mismatch as not found — don't reveal that the house exists
+  if (!userId || house.userId !== userId) notFound();
 
   const latest = house.events[0];
 

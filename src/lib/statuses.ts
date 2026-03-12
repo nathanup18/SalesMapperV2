@@ -32,7 +32,7 @@ export const STATUS_BADGE: Record<Status, string> = {
 
 /** The three statuses a rep can actively record (NOT_VISITED is implicit). */
 export const PLACEABLE_STATUSES = [
+  "SOLD",
   "NOT_HOME",
   "NOT_INTERESTED",
-  "SOLD",
 ] as const satisfies readonly Status[];

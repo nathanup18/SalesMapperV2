@@ -74,27 +74,32 @@ export default function MapCore() {
   const [houses, setHouses] = useState<House[]>([]);
   const [isPlacing, setIsPlacing] = useState(false);
   const [placingLoading, setPlacingLoading] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState<Status>("NOT_HOME");
-  const [repName, setRepName] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState<Status>("SOLD");
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [flyTo, setFlyTo] = useState<FlyToTarget | null>(null);
   const [filters, setFilters] = useState<FilterState>({ status: "ALL", rep: "ALL", date: "ALL" });
   const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem("sm_repName");
-    if (saved) setRepName(saved);
     fetchHouses();
   }, []);
 
-  const saveRepName = (name: string) => {
-    setRepName(name);
-    localStorage.setItem("sm_repName", name);
-  };
-
   const fetchHouses = async () => {
-    const res = await fetch("/api/houses");
-    setHouses(await res.json());
+    try {
+      const res = await fetch("/api/houses");
+      if (!res.ok) {
+        console.error("[fetchHouses] API error:", res.status, res.statusText);
+        return;
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setHouses(data);
+      } else {
+        console.error("[fetchHouses] unexpected response shape:", data);
+      }
+    } catch (err) {
+      console.error("[fetchHouses] network error:", err);
+    }
   };
 
   // ── Place flow ───────────────────────────────────────────────────────────────
@@ -102,25 +107,28 @@ export default function MapCore() {
   // No modal. Placement mode persists until explicitly cancelled.
 
   const handleMapClick = async (lat: number, lng: number) => {
-    if (!repName.trim()) {
-      alert("Enter your name first.");
-      return;
-    }
     setPlacingLoading(true);
     try {
-      await fetch("/api/events", {
+      const res = await fetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           latitude: lat,
           longitude: lng,
-          createdByName: repName.trim(),
           status: selectedStatus,
           notes: null,
-          type: "CREATE",
         }),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Server error" }));
+        console.error("[handleMapClick] placement failed:", res.status, err);
+        alert(`Marker placement failed: ${err.error ?? "Server error (check console)"}`);
+        return;
+      }
       await fetchHouses();
+    } catch (err) {
+      console.error("[handleMapClick] network error:", err);
+      alert("Marker placement failed — check your network connection.");
     } finally {
       setPlacingLoading(false);
       // Intentionally do NOT exit placing mode — persist for next tap
@@ -163,7 +171,6 @@ export default function MapCore() {
           type: "EDIT",
           status,
           notes: notes || null,
-          createdByName: repName.trim() || "unknown",
         }),
       }),
     ];
@@ -174,10 +181,7 @@ export default function MapCore() {
         fetch(`/api/houses/${editTarget.houseId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            address,
-            createdByName: repName.trim() || "unknown",
-          }),
+          body: JSON.stringify({ address }),
         })
       );
     }
@@ -249,7 +253,6 @@ export default function MapCore() {
               : null
           }
           onEdit={() => handleOpenEdit(h.id)}
-          onDelete={() => handleDelete(h.id)}
         />
       ),
     };
@@ -284,8 +287,6 @@ export default function MapCore() {
 
       {/* Bottom-right FAB + placement controls */}
       <MapControls
-        repName={repName}
-        onRepNameChange={saveRepName}
         isPlacing={isPlacing}
         placingLoading={placingLoading}
         selectedStatus={selectedStatus}
@@ -300,9 +301,10 @@ export default function MapCore() {
           address={editTarget.address}
           currentStatus={editTarget.currentStatus}
           currentNotes={editTarget.currentNotes}
-          actingUser={repName}
+          canDelete={true}
           onSave={handleSaveEdit}
           onCancel={() => setEditTarget(null)}
+          onDelete={async () => { await handleDelete(editTarget.houseId); setEditTarget(null); }}
         />
       )}
     </div>

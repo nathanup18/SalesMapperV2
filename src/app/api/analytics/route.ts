@@ -1,10 +1,27 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSignedInUser, AuthError } from "@/lib/server-auth";
 
 export async function GET() {
+  let acting;
+  try {
+    acting = await getSignedInUser();
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.statusCode });
+    }
+    throw err;
+  }
+
+  const userId = acting.user.id;
+  const eventWhere = { house: { userId } };
+
   const [events, houseCount] = await Promise.all([
-    prisma.doorEvent.findMany({ select: { status: true, createdAt: true, createdByName: true } }),
-    prisma.house.count(),
+    prisma.doorEvent.findMany({
+      where: eventWhere,
+      select: { status: true, createdAt: true, createdByName: true },
+    }),
+    prisma.house.count({ where: { userId } }),
   ]);
 
   const total = events.length;
