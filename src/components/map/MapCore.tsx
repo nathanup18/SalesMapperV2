@@ -1,23 +1,15 @@
 "use client";
 
-/**
- * MapCore — orchestrator.
- *
- * Responsibilities:
- *   - Fetch houses + their latest event from the API
- *   - Manage placement / edit / filter / search / follow-up state
- *   - Build provider-agnostic MarkerData[]
- *   - Render the map provider + overlay controls + modals
- *
- * To swap map providers:
- *   Change the dynamic import below to point at a different file in
- *   ./providers/ that satisfies MapProviderProps (see providers/types.ts).
- */
-
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { STATUS_HEX, type Status } from "@/lib/statuses";
+import { useAuth } from "@/contexts/AuthContext";
+import { perm } from "@/lib/permissions";
+import { useMarkers } from "@/hooks/useMarkers";
+import { createMarker, updateMarker, softDeleteMarker } from "@/lib/markers";
+import type { Marker, MarkerStatus } from "@/lib/types";
 
 import type { MarkerData, MapProviderProps, FlyToTarget } from "./providers/types";
 import MarkerPopup from "./MarkerPopup";
@@ -27,8 +19,6 @@ import AddressSearch from "@/components/search/AddressSearch";
 import MarkerFilters, { type FilterState } from "@/components/filters/MarkerFilters";
 import AppMenu from "@/components/navigation/AppMenu";
 
-// ── Swap providers here ──────────────────────────────────────────────────────
-// Replace "./providers/MapboxMap" with any file satisfying MapProviderProps.
 const MapProvider = dynamic<MapProviderProps>(
   () => import("./providers/MapboxMap"),
   {
@@ -41,37 +31,18 @@ const MapProvider = dynamic<MapProviderProps>(
   }
 );
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-type DoorEvent = {
-  id: string;
-  type: string;
-  status: string;
-  notes: string | null;
-  createdByName: string;
-  createdAt: string;
-};
-
-type House = {
-  id: string;
-  address: string | null;
-  latitude: number;
-  longitude: number;
-  /** Sorted newest-first by API. Index 0 = current visible state. */
-  events: DoorEvent[];
-};
-
 type EditTarget = {
-  houseId: string;
+  markerId: string;
   address: string | null;
   currentStatus: string;
   currentNotes: string | null;
 };
 
-// ── Component ──────────────────────────────────────────────────────────────────
-
 export default function MapCore() {
-  const [houses, setHouses] = useState<House[]>([]);
+  const router = useRouter();
+  const { user, orgId, membership, loading: authLoading } = useAuth();
+  const { markers, loading: markersLoading, error: markersError } = useMarkers(orgId);
+
   const [isPlacing, setIsPlacing] = useState(false);
   const [placingLoading, setPlacingLoading] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<Status>("SOLD");
@@ -80,115 +51,69 @@ export default function MapCore() {
   const [filters, setFilters] = useState<FilterState>({ status: "ALL", rep: "ALL", date: "ALL" });
   const [showFilters, setShowFilters] = useState(false);
 
+  // ── Access control ────────────────────────────────────────────────────────────
+
   useEffect(() => {
-    fetchHouses();
-  }, []);
-
-  const fetchHouses = async () => {
-    try {
-      const res = await fetch("/api/houses");
-      if (!res.ok) {
-        console.error("[fetchHouses] API error:", res.status, res.statusText);
-        return;
-      }
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setHouses(data);
-      } else {
-        console.error("[fetchHouses] unexpected response shape:", data);
-      }
-    } catch (err) {
-      console.error("[fetchHouses] network error:", err);
+    if (authLoading) return;
+    if (!user) { router.replace("/sign-in"); return; }
+    if (!orgId || !membership || membership.status !== "active") {
+      router.replace("/no-access");
+      return;
     }
-  };
+    if (!perm(membership, "canViewMap")) {
+      router.replace("/no-access");
+    }
+  }, [authLoading, user, orgId, membership, router]);
 
-  // ── Place flow ───────────────────────────────────────────────────────────────
-  // Map tap → immediate POST (server reverse-geocodes + proximity checks).
-  // No modal. Placement mode persists until explicitly cancelled.
+  // ── Derived permissions ───────────────────────────────────────────────────────
+
+  const canPlace = perm(membership, "canPlaceMarkers");
+  const canEdit  = perm(membership, "canEditMarkers");
+
+  // ── Place flow ────────────────────────────────────────────────────────────────
 
   const handleMapClick = async (lat: number, lng: number) => {
+    if (!orgId || !canPlace) return;
     setPlacingLoading(true);
     try {
-      const res = await fetch("/api/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          latitude: lat,
-          longitude: lng,
-          status: selectedStatus,
-          notes: null,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "Server error" }));
-        console.error("[handleMapClick] placement failed:", res.status, err);
-        alert(`Marker placement failed: ${err.error ?? "Server error (check console)"}`);
-        return;
-      }
-      await fetchHouses();
+      await createMarker({ orgId, lat, lng, status: selectedStatus as MarkerStatus });
     } catch (err) {
-      console.error("[handleMapClick] network error:", err);
-      alert("Marker placement failed — check your network connection.");
+      console.error("[handleMapClick] createMarker failed:", err);
+      alert(`Marker placement failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setPlacingLoading(false);
-      // Intentionally do NOT exit placing mode — persist for next tap
     }
   };
 
-  // ── Delete flow ──────────────────────────────────────────────────────────────
-  // Hard delete — removes the House + all DoorEvents (CASCADE).
-  // Only reachable via the explicit "Delete marker" button + inline confirmation.
+  // ── Delete flow ───────────────────────────────────────────────────────────────
 
-  const handleDelete = async (houseId: string) => {
-    await fetch(`/api/houses/${houseId}`, { method: "DELETE" });
-    await fetchHouses();
+  const handleDelete = async (markerId: string) => {
+    if (!orgId || !canEdit) return;
+    await softDeleteMarker(orgId, markerId);
   };
 
-  // ── Edit flow ────────────────────────────────────────────────────────────────
-  // Only reachable via the explicit "Edit" button inside a marker popup.
-  // Appends EDIT event; if address changed, also PATCHes house + appends ADDRESS_CHANGE event.
+  // ── Edit flow ─────────────────────────────────────────────────────────────────
 
-  const handleOpenEdit = (houseId: string) => {
-    const house = houses.find((h) => h.id === houseId);
-    if (!house) return;
-    const latest = house.events[0];
+  const handleOpenEdit = (marker: Marker) => {
+    if (!canEdit) return;
     setEditTarget({
-      houseId,
-      address: house.address,
-      currentStatus: latest?.status ?? "NOT_VISITED",
-      currentNotes: latest?.notes ?? null,
+      markerId: marker.id,
+      address: marker.address,
+      currentStatus: marker.status,
+      currentNotes: marker.notes,
     });
   };
 
   const handleSaveEdit = async (status: string, notes: string, address: string) => {
-    if (!editTarget) return;
-
-    const tasks: Promise<unknown>[] = [
-      fetch(`/api/houses/${editTarget.houseId}/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "EDIT",
-          status,
-          notes: notes || null,
-        }),
-      }),
-    ];
-
-    // Only PATCH house if address actually changed
-    if (address && address !== editTarget.address) {
-      tasks.push(
-        fetch(`/api/houses/${editTarget.houseId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address }),
-        })
-      );
-    }
-
-    await Promise.all(tasks);
+    if (!editTarget || !orgId || !canEdit) return;
+    await updateMarker({
+      orgId,
+      markerId: editTarget.markerId,
+      status: status as MarkerStatus,
+      notes: notes || null,
+      ...(address !== (editTarget.address ?? "") ? { address: address || null } : {}),
+    });
     setEditTarget(null);
-    await fetchHouses();
   };
 
   // ── Search / flyTo ────────────────────────────────────────────────────────────
@@ -199,82 +124,80 @@ export default function MapCore() {
 
   // ── Derived data ──────────────────────────────────────────────────────────────
 
-  // Client-side filter on the loaded houses
-  const filteredHouses = houses.filter((h) => {
-    const latest = h.events[0];
-    if (filters.status !== "ALL") {
-      if (latest?.status !== filters.status) return false;
-    }
-    if (filters.rep !== "ALL") {
-      if (latest?.createdByName !== filters.rep) return false;
-    }
-    if (filters.date !== "ALL" && latest) {
-      const d = new Date(latest.createdAt);
-      const now = new Date();
-      if (filters.date === "TODAY" && d.toDateString() !== now.toDateString()) return false;
-      if (filters.date === "WEEK") {
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        if (d < weekAgo) return false;
+  const filteredMarkers = markers.filter((m) => {
+    if (filters.status !== "ALL" && m.status !== filters.status) return false;
+    if (filters.rep !== "ALL" && m.createdByName !== filters.rep) return false;
+    if (filters.date !== "ALL") {
+      const d = m.createdAt?.toDate?.();
+      if (d) {
+        const now = new Date();
+        if (filters.date === "TODAY" && d.toDateString() !== now.toDateString()) return false;
+        if (filters.date === "WEEK") {
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          if (d < weekAgo) return false;
+        }
       }
     }
     return true;
   });
 
-  // All unique rep names (from latest event per house)
   const allReps = [
-    ...new Set(
-      houses.flatMap((h) => h.events.map((e) => e.createdByName)).filter(Boolean)
-    ),
+    ...new Set(markers.map((m) => m.createdByName).filter((n): n is string => !!n)),
   ].sort();
 
-  // ── Build marker data ─────────────────────────────────────────────────────────
+  const markerData: MarkerData[] = filteredMarkers.map((m) => ({
+    id: m.id,
+    lat: m.lat,
+    lng: m.lng,
+    color: STATUS_HEX[m.status as Status],
+    popupContent: (
+      <MarkerPopup
+        marker={m}
+        // Only pass onEdit if the user has canEditMarkers
+        onEdit={canEdit ? () => handleOpenEdit(m) : undefined}
+      />
+    ),
+  }));
 
-  const markers: MarkerData[] = filteredHouses.map((h) => {
-    const latest = h.events[0];
-    const status = (latest?.status ?? "NOT_VISITED") as Status;
-    return {
-      id: h.id,
-      lat: h.latitude,
-      lng: h.longitude,
-      color: STATUS_HEX[status],
-      popupContent: (
-        <MarkerPopup
-          houseId={h.id}
-          address={h.address}
-          latestEvent={
-            latest
-              ? {
-                  status: latest.status,
-                  notes: latest.notes,
-                  createdByName: latest.createdByName,
-                  createdAt: latest.createdAt,
-                  type: latest.type,
-                }
-              : null
-          }
-          onEdit={() => handleOpenEdit(h.id)}
-        />
-      ),
-    };
-  });
+  // ── Loading / access guard ────────────────────────────────────────────────────
+
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!user || !orgId || !membership || membership.status !== "active") {
+    return null; // Redirect is underway
+  }
 
   return (
     <div className="relative w-full h-full">
-      {/* Map provider — all Leaflet specifics isolated inside LeafletMap.tsx */}
       <MapProvider
-        markers={markers}
+        markers={markerData}
         placingMode={isPlacing}
-        onMapClick={handleMapClick}
+        onMapClick={canPlace ? handleMapClick : () => {}}
         defaultCenter={[39.7392, -104.9903]}
         defaultZoom={15}
         flyTo={flyTo}
       />
 
-      {/* Top overlay: search + filters + menu */}
+      {markersError && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1001] bg-red-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg max-w-xs text-center pointer-events-none">
+          {markersError}
+        </div>
+      )}
+
+      {markersLoading && markers.length === 0 && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1001] bg-white text-gray-500 text-xs font-medium px-4 py-2 rounded-lg shadow-md pointer-events-none">
+          Loading markers…
+        </div>
+      )}
+
       <div className="absolute top-3 left-3 right-3 z-[1000] flex gap-2">
-        <AddressSearch
-          onResult={(r) => flyToCoords(r.lat, r.lng, 17)}
-        />
+        <AddressSearch onResult={(r) => flyToCoords(r.lat, r.lng, 17)} />
         <MarkerFilters
           filters={filters}
           allReps={allReps}
@@ -285,18 +208,19 @@ export default function MapCore() {
         <AppMenu />
       </div>
 
-      {/* Bottom-right FAB + placement controls */}
-      <MapControls
-        isPlacing={isPlacing}
-        placingLoading={placingLoading}
-        selectedStatus={selectedStatus}
-        onStartPlacing={() => setIsPlacing(true)}
-        onSelectStatus={(s) => { setSelectedStatus(s); setIsPlacing(true); }}
-        onCancelPlacing={() => setIsPlacing(false)}
-      />
+      {/* FAB only renders if user can place markers */}
+      {canPlace && (
+        <MapControls
+          isPlacing={isPlacing}
+          placingLoading={placingLoading}
+          selectedStatus={selectedStatus}
+          onStartPlacing={() => setIsPlacing(true)}
+          onSelectStatus={(s) => { setSelectedStatus(s); setIsPlacing(true); }}
+          onCancelPlacing={() => setIsPlacing(false)}
+        />
+      )}
 
-      {/* Edit modal — only from explicit popup Edit button */}
-      {editTarget && (
+      {canEdit && editTarget && (
         <EditEventModal
           address={editTarget.address}
           currentStatus={editTarget.currentStatus}
@@ -304,7 +228,7 @@ export default function MapCore() {
           canDelete={true}
           onSave={handleSaveEdit}
           onCancel={() => setEditTarget(null)}
-          onDelete={async () => { await handleDelete(editTarget.houseId); setEditTarget(null); }}
+          onDelete={async () => { await handleDelete(editTarget.markerId); setEditTarget(null); }}
         />
       )}
     </div>

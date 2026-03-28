@@ -53,9 +53,10 @@ export async function GET() {
   // Rep leaderboard
   const repMap: Record<string, { doors: number; sales: number }> = {};
   for (const e of events) {
-    if (!repMap[e.createdByName]) repMap[e.createdByName] = { doors: 0, sales: 0 };
-    repMap[e.createdByName].doors++;
-    if (e.status === "SOLD") repMap[e.createdByName].sales++;
+    const key = e.createdByName ?? "Unknown";
+    if (!repMap[key]) repMap[key] = { doors: 0, sales: 0 };
+    repMap[key].doors++;
+    if (e.status === "SOLD") repMap[key].sales++;
   }
   const reps = Object.entries(repMap)
     .map(([name, s]) => ({ name, ...s }))

@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getMembership(orgId) {
+      return get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data;
+    }
+
+    function isActiveMember(orgId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)) &&
+        getMembership(orgId).status == "active";
+    }
+
+    function hasPerm(orgId, permKey) {
+      return isActiveMember(orgId) && getMembership(orgId).permissions[permKey] == true;
+    }
+
+    // ── users/{userId} ────────────────────────────────────────────────────────
+
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ── organizations/{orgId} ─────────────────────────────────────────────────
+
+    match /organizations/{orgId} {
+      allow read: if isActiveMember(orgId);
+      allow create: if isSignedIn() &&
+        request.resource.data.createdByUserId == request.auth.uid;
+      allow update: if hasPerm(orgId, "canManagePermissions");
+      allow delete: if false;
+    }
+
+    // ── organizations/{orgId}/members/{userId} ────────────────────────────────
+    // Create: invite redemption writes own doc (userId must equal caller uid).
+    // Update/delete: requires canManagePermissions.
+
+    match /organizations/{orgId}/members/{userId} {
+      allow read: if isActiveMember(orgId);
+
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+        request.resource.data.status == "active" &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.organizationId == orgId;
+
+      allow update: if hasPerm(orgId, "canManagePermissions") &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.organizationId == resource.data.organizationId;
+
+      allow delete: if hasPerm(orgId, "canManagePermissions");
+    }
+
+    // ── organizations/{orgId}/markers/{markerId} ──────────────────────────────
+
+    match /organizations/{orgId}/markers/{markerId} {
+      allow read: if hasPerm(orgId, "canViewMap");
+
+      allow create: if hasPerm(orgId, "canPlaceMarkers") &&
+        request.resource.data.createdByUserId == request.auth.uid &&
+        request.resource.data.organizationId == orgId &&
+        request.resource.data.deletedAt == null;
+
+      allow update: if hasPerm(orgId, "canEditMarkers") &&
+        request.resource.data.createdByUserId == resource.data.createdByUserId &&
+        request.resource.data.organizationId == resource.data.organizationId;
+
+      allow delete: if false;
+    }
+
+    // ── invites/{token} ───────────────────────────────────────────────────────
+    // token = doc ID — O(1) lookup, no collection group index needed.
+    //
+    // Read: any signed-in user (invite page loads before membership exists).
+    // Create: active member with canInviteUsers.
+    // Update: only the invited email may redeem; only pending→accepted allowed.
+    // Delete: blocked.
+
+    match /invites/{token} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+        request.resource.data.invitedByUserId == request.auth.uid &&
+        hasPerm(request.resource.data.organizationId, "canInviteUsers") &&
+        request.resource.data.status == "pending";
+
+      allow update: if isSignedIn() &&
+        request.auth.token.email.lower() == resource.data.email &&
+        resource.data.status == "pending" &&
+        request.resource.data.status == "accepted" &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.organizationId == resource.data.organizationId &&
+        request.resource.data.token == resource.data.token;
+
+      allow delete: if false;
+    }
+
+  }
+}

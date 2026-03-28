@@ -98,7 +98,7 @@ model DoorEvent {
   type          String   @default("CREATE")
   status        String
   notes         String?
-  createdByName String
+  createdByName String?
   createdAt     DateTime @default(now())
 
   @@index([houseId])

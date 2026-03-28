@@ -3,7 +3,7 @@ import DoorEventBadge from "./DoorEventBadge";
 type DoorEvent = {
   id: string;
   type: string;
-  createdByName: string;
+  createdByName: string | null;
   status: string;
   notes: string | null;
   createdAt: Date | string;

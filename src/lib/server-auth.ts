@@ -60,10 +60,9 @@ export class AuthError extends Error {
  * Only throws AuthError — all internal DB errors are caught and wrapped.
  */
 export async function getActingUser() {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) throw new AuthError("Unauthorized", 401);
-
   try {
+    const { userId: clerkId } = await auth();
+    if (!clerkId) throw new AuthError("Unauthorized", 401);
     let membership = await prisma.membership.findFirst({
       where: { user: { clerkId } },
       include: { user: true, organization: true },
@@ -174,10 +173,13 @@ export async function getActingOrgId(): Promise<string | null> {
  * Only throws AuthError — never a raw exception.
  */
 export async function getSignedInUser() {
-  const { userId: clerkId } = await auth();
-  if (!clerkId) throw new AuthError("Unauthorized", 401);
-
+  // auth() is inside the try so any Clerk-level throw (e.g. "can't detect
+  // clerkMiddleware") is caught and wrapped as AuthError rather than escaping
+  // as a raw exception that produces Next.js's opaque 500 {} response.
   try {
+    const { userId: clerkId } = await auth();
+    if (!clerkId) throw new AuthError("Unauthorized", 401);
+
     let user = await prisma.user.findUnique({ where: { clerkId } });
     if (!user) {
       const clerkProfile = await currentUser();

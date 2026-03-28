@@ -26,31 +26,37 @@ export async function POST(req: Request) {
 
   try {
     const geo = await reverseGeocode(latitude, longitude);
+    const address = geo?.address ?? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+
+    // Step 1: create the house row.
     const house = await prisma.house.create({
-      data: {
-        latitude,
-        longitude,
-        address: geo?.address ?? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
-        userId: acting.user.id,
-      },
+      data: { latitude, longitude, address, userId: acting.user.id },
     });
 
-    const event = await prisma.doorEvent.create({
-      data: {
-        houseId: house.id,
-        userId: acting.user.id,
-        type: "CREATE",
-        createdByName,
-        status,
-        notes: notes?.trim() || null,
-      },
-      include: { house: true },
-    });
+    // Step 2: create the event row. If this fails, delete the house so it
+    // doesn't become an orphan (no events → always renders as gray NOT_VISITED).
+    let event;
+    try {
+      event = await prisma.doorEvent.create({
+        data: {
+          houseId: house.id,
+          userId: acting.user.id,
+          type: "CREATE",
+          createdByName,
+          status,
+          notes: notes?.trim() || null,
+        },
+        include: { house: true },
+      });
+    } catch (eventErr) {
+      await prisma.house.delete({ where: { id: house.id } }).catch(() => {});
+      throw eventErr;
+    }
 
     return NextResponse.json(event, { status: 201 });
   } catch (err) {
     console.error("[POST /api/events] DB error:", err);
-    return NextResponse.json({ error: "Database error — tables may not exist yet" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to save marker — please try again." }, { status: 500 });
   }
 }
 

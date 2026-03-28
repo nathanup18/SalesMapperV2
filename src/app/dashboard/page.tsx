@@ -1,71 +1,74 @@
-import Link from "next/link";
-import { prisma } from "@/lib/prisma";
-import { getSignedInUserId } from "@/lib/server-auth";
+"use client";
+
+import { useMemo, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/contexts/AuthContext";
+import { perm } from "@/lib/permissions";
+import { useMarkers } from "@/hooks/useMarkers";
 import MiniBarChart from "@/components/analytics/MiniBarChart";
 import AppMenu from "@/components/navigation/AppMenu";
 
-const EMPTY_ANALYTICS = {
-  total: 0, sold: 0, notInterested: 0, notHome: 0, houseCount: 0,
-  conversionRate: "—", outreachRatio: "—", hourly: [] as {label:string;count:number}[],
-  daily: [] as {label:string;count:number}[], reps: [] as {name:string;doors:number;sales:number}[],
-};
+export default function DashboardPage() {
+  const router = useRouter();
+  const { orgId, membership, loading: authLoading } = useAuth();
 
-async function getAnalytics(userId: string) {
-  const eventWhere = { house: { userId } };
-  let events: { status: string; createdAt: Date; createdByName: string }[] = [];
-  let houseCount = 0;
-  try {
-    [events, houseCount] = await Promise.all([
-      prisma.doorEvent.findMany({
-        where: eventWhere,
-        select: { status: true, createdAt: true, createdByName: true },
-      }),
-      prisma.house.count({ where: { userId } }),
-    ]);
-  } catch (err) {
-    console.error("[getAnalytics] DB error:", err);
-    return EMPTY_ANALYTICS;
+  useEffect(() => {
+    if (authLoading) return;
+    if (!perm(membership, "canViewDashboard")) router.replace("/no-access");
+  }, [authLoading, membership, router]);
+  const { markers, loading: markersLoading } = useMarkers(orgId);
+
+  const s = useMemo(() => {
+    const total = markers.length;
+    const sold = markers.filter((m) => m.status === "SOLD").length;
+    const notInterested = markers.filter((m) => m.status === "NOT_INTERESTED").length;
+    const notHome = markers.filter((m) => m.status === "NOT_HOME").length;
+
+    const conversionRate =
+      sold + notInterested > 0
+        ? `${((sold / (sold + notInterested)) * 100).toFixed(1)}%`
+        : "—";
+
+    const outreachRatio = total > 0 ? `${((sold / total) * 100).toFixed(1)}%` : "—";
+
+    const hourly = Array.from({ length: 24 }, (_, h) => ({
+      label: h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`,
+      count: markers.filter((m) => {
+        const d = m.createdAt?.toDate?.();
+        return d ? d.getHours() === h : false;
+      }).length,
+    }));
+
+    const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const daily = DAY_NAMES.map((day, i) => ({
+      label: day,
+      count: markers.filter((m) => {
+        const d = m.createdAt?.toDate?.();
+        return d ? d.getDay() === i : false;
+      }).length,
+    }));
+
+    const repMap: Record<string, { doors: number; sales: number }> = {};
+    for (const m of markers) {
+      const key = m.createdByName ?? "Unknown";
+      if (!repMap[key]) repMap[key] = { doors: 0, sales: 0 };
+      repMap[key].doors++;
+      if (m.status === "SOLD") repMap[key].sales++;
+    }
+    const reps = Object.entries(repMap)
+      .map(([name, s]) => ({ name, ...s }))
+      .sort((a, b) => b.sales - a.sales);
+
+    return { total, sold, notInterested, notHome, conversionRate, outreachRatio, hourly, daily, reps };
+  }, [markers]);
+
+  if (authLoading || markersLoading) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+        Loading…
+      </div>
+    );
   }
-
-  const total = events.length;
-  const sold = events.filter((e) => e.status === "SOLD").length;
-  const notInterested = events.filter((e) => e.status === "NOT_INTERESTED").length;
-  const notHome = events.filter((e) => e.status === "NOT_HOME").length;
-
-  const conversionRate =
-    sold + notInterested > 0
-      ? `${((sold / (sold + notInterested)) * 100).toFixed(1)}%`
-      : "—";
-
-  const outreachRatio = total > 0 ? `${((sold / total) * 100).toFixed(1)}%` : "—";
-
-  const hourly = Array.from({ length: 24 }, (_, h) => ({
-    label: h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`,
-    count: events.filter((e) => new Date(e.createdAt).getHours() === h).length,
-  }));
-
-  const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const daily = DAY_NAMES.map((day, i) => ({
-    label: day,
-    count: events.filter((e) => new Date(e.createdAt).getDay() === i).length,
-  }));
-
-  const repMap: Record<string, { doors: number; sales: number }> = {};
-  for (const e of events) {
-    if (!repMap[e.createdByName]) repMap[e.createdByName] = { doors: 0, sales: 0 };
-    repMap[e.createdByName].doors++;
-    if (e.status === "SOLD") repMap[e.createdByName].sales++;
-  }
-  const reps = Object.entries(repMap)
-    .map(([name, s]) => ({ name, ...s }))
-    .sort((a, b) => b.sales - a.sales);
-
-  return { total, sold, notInterested, notHome, houseCount, conversionRate, outreachRatio, hourly, daily, reps };
-}
-
-export default async function DashboardPage() {
-  const userId = await getSignedInUserId();
-  const s = userId ? await getAnalytics(userId) : EMPTY_ANALYTICS;
 
   return (
     <div className="px-4 py-6 sm:px-8 sm:py-8 max-w-4xl mx-auto">
@@ -76,7 +79,7 @@ export default async function DashboardPage() {
         <AppMenu />
       </div>
 
-      {/* Row 1 — 4 equal KPI cards (same visual weight) */}
+      {/* Row 1 — 4 equal KPI cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <KpiCard label="Total Doors" value={s.total} accent="blue" />
         <KpiCard label="Sales Closed" value={s.sold} accent="green" />
@@ -100,7 +103,7 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* Charts — stacked vertically, full width */}
+      {/* Charts */}
       <div className="space-y-4 mb-6">
         <div className="border border-gray-100 rounded-xl p-5 bg-white shadow-sm">
           <MiniBarChart data={s.hourly} title="Activity by Hour of Day" />

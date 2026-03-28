@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useAuth } from "@/contexts/AuthContext";
 import AppMenu from "@/components/navigation/AppMenu";
 
 export default function SettingsPage() {
-  const { user: clerkUser, isLoaded: clerkLoaded } = useUser();
+  const { user, loading } = useAuth();
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -13,10 +13,10 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(false), 2500);
   };
 
-  if (!clerkLoaded) return null;
+  if (loading) return null;
 
-  const displayName = clerkUser?.fullName || clerkUser?.firstName || "";
-  const displayEmail = clerkUser?.primaryEmailAddress?.emailAddress ?? "";
+  const displayName = user?.displayName ?? "";
+  const displayEmail = user?.email ?? "";
 
   return (
     <div className="px-4 py-6 sm:px-8 sm:py-8 max-w-2xl mx-auto">

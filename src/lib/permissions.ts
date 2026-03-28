@@ -1,21 +1,39 @@
-import type { Role } from "./current-user";
+import type { Permissions, Membership } from "./types";
 
-/** Managers and Admins can view all reps' activity and manage the team. */
-export function canManageTeam(role: Role): boolean {
-  return role === "ADMIN" || role === "MANAGER";
-}
+// ── Preset permission sets ─────────────────────────────────────────────────────
 
-/** Only Admins can access admin-only controls (permissions, billing, etc.). */
-export function canAccessAdmin(role: Role): boolean {
-  return role === "ADMIN";
-}
+/** Full access — assigned to the bootstrapped org owner. */
+export const ADMIN_PERMISSIONS: Permissions = {
+  canViewMap: true,
+  canPlaceMarkers: true,
+  canEditMarkers: true,
+  canViewDashboard: true,
+  canInviteUsers: true,
+  canManagePermissions: true,
+};
 
-/** Managers and Admins can view activity across all reps. */
-export function canViewAllReps(role: Role): boolean {
-  return role === "ADMIN" || role === "MANAGER";
-}
+/** Baseline for a newly invited field rep. */
+export const DEFAULT_MEMBER_PERMISSIONS: Permissions = {
+  canViewMap: true,
+  canPlaceMarkers: true,
+  canEditMarkers: false,
+  canViewDashboard: false,
+  canInviteUsers: false,
+  canManagePermissions: false,
+};
 
-/** Only Admins can change other users' roles. */
-export function canEditRoles(role: Role): boolean {
-  return role === "ADMIN";
+// ── Gate helper ────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true if the membership exists, is active, and has the given permission.
+ *
+ * Usage:
+ *   if (perm(membership, "canPlaceMarkers")) { ... }
+ */
+export function perm(
+  membership: Membership | null | undefined,
+  key: keyof Permissions
+): boolean {
+  if (!membership || membership.status !== "active") return false;
+  return membership.permissions[key] === true;
 }
